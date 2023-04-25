@@ -1,7 +1,7 @@
 - 👋 Hi, I’m @cjonesii
-- 👀 I’m interested in arm-M3 / arm-m4 applications
-- 🌱 I’m currently learning STM32F MCUs
-- 💞️ I’m looking to collaborate on arm-M3 and arm-M4 projects
+- 👀 
+- 🌱 
+- 💞️ 
 - 📫 How to reach me : send me an email @ cjonesii@yahoo.com
 
 <!---
