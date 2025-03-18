@@ -1,0 +1,154 @@
+#include <ch32v003fun.h>
+#include <stdio.h>
+#include <exti.h>
+#if( SLEEP_VIA_RESET == 1 )
+#include <iwdg.h>
+#endif // ( SLEEP_VIA_RESET == 1 )
+#include <systick.h>
+
+/* Global Data */
+static uint32_t ram_marker = 0U;
+
+/* Local Static Data */
+static bool isSetToSleepMode = true;
+static bool isSystemInitd = false;
+
+/* Local Static Function Prototypes */
+static void boot_init( void );
+static void system_wakeup( void );
+static void system_sleepmode( void );
+static void system_nonactivity_timeout( void );
+static void system_enter_sleepmode( void );
+
+/* Main */
+int main()
+{
+    SystemInit();
+
+    // This delay gives us some time to reprogram the device.
+	// Otherwise if the device enters standby mode we can't
+	// program it any more.
+    Delay_Ms( 5000 );
+
+    system_enter_sleepmode(); // The peripherals are configured here to support sleep mode
+
+    while (1)
+    {
+        if( isSetToSleepMode )
+        {
+            __WFE(); // Wait for event/interrupt
+            SystemInit();
+            Delay_Ms( 5000 );
+            isSetToSleepMode = false;
+        }
+        else
+        {
+            if( !isSystemInitd )
+            {
+                printf( "ram_marker: 0x%lx\n\r", ram_marker );
+                system_wakeup();	// This is the real peripheral initialization routine
+                isSystemInitd = true;
+            }
+            else
+            {
+                application_process();	// This is the entry point of the main firmware routine
+                system_nonactivity_timeout(); // This is the test sleep entry point (i.e. 
+                ram_marker = 0xA50FBEEF;
+            }
+        }
+    }
+}
+
+/* Local Functions */
+/* Set all GPIOs to input and initialize minimum peripheral to support wake up */
+static void boot_init( void )
+{
+    RCC->APB2PCENR |= RCC_APB2Periph_GPIOA | RCC_APB2Periph_GPIOC | RCC_APB2Periph_GPIOD;
+
+	// GPIOA: Set to input with pull-up/pull-down
+	GPIOA->CFGLR = (GPIO_CNF_IN_PUPD<<(4*1)) | (GPIO_CNF_IN_PUPD<<(4*0));
+	GPIOA->BSHR = GPIO_BSHR_BS1 | GPIO_BSHR_BR0;
+	// GPIOC: Set to input with pull-up/pull-down
+	GPIOC->CFGLR = (GPIO_CNF_IN_PUPD<<(4*7)) |
+				   (GPIO_CNF_IN_PUPD<<(4*6)) |
+				   (GPIO_CNF_IN_PUPD<<(4*5)) |
+				   (GPIO_CNF_IN_PUPD<<(4*4)) |
+                   (GPIO_CNF_IN_PUPD<<(4*3)) |
+				   (GPIO_CNF_IN_PUPD<<(4*2)) |
+				   (GPIO_CNF_IN_PUPD<<(4*1)) |
+				   (GPIO_CNF_IN_PUPD<<(4*0));
+	GPIOC->BSHR = GPIO_BSHR_BR7 |
+				  GPIO_BSHR_BR6 |
+				  GPIO_BSHR_BR5 |
+				  GPIO_BSHR_BR4 |
+                  GPIO_BSHR_BR3 |
+				  GPIO_BSHR_BR2 |
+				  GPIO_BSHR_BR1 |
+				  GPIO_BSHR_BR0;
+	// GPIOD: D2 set to input pull-up/pull-down
+	GPIOD->CFGLR = (GPIO_CNF_IN_PUPD<<(4*7)) |
+				   (GPIO_CNF_IN_PUPD<<(4*6)) |
+				   (GPIO_CNF_IN_PUPD<<(4*5)) |
+				   (GPIO_CNF_IN_PUPD<<(4*4)) |
+				   (GPIO_CNF_IN_PUPD<<(4*3)) |
+				   (GPIO_CNF_IN_PUPD<<(4*2)) |
+                   (GPIO_CNF_IN_PUPD<<(4*1)) |
+				   (GPIO_CNF_IN_PUPD<<(4*0));
+	GPIOD->BSHR = GPIO_BSHR_BR7 |
+				  GPIO_BSHR_BR6 |
+				  GPIO_BSHR_BR5 |
+				  GPIO_BSHR_BR4 |
+				  GPIO_BSHR_BR3 |
+				  GPIO_BSHR_BR2 |
+                  GPIO_BSHR_BR1 |
+				  GPIO_BSHR_BR0;
+
+	RCC->APB2PCENR |= RCC_AFIOEN;
+
+	// assign pin 4 interrupt from port C to EXTI channel 4
+    // pin 2 interrupt from port A to EXTI channel 2
+    AFIO->EXTICR |= AFIO_EXTICR_EXTI2_PA | AFIO_EXTICR_EXTI4_PC;
+
+	// enable line4 and line2 interrupt event
+	EXTI->EVENR |= EXTI_EVENR_MR4 | EXTI_EVENR_MR2;
+	EXTI->FTENR |= EXTI_FTENR_TR4 | EXTI_FTENR_TR2;
+    EXTI->RTENR |= EXTI_RTENR_TR4 | EXTI_RTENR_TR2;
+}
+
+static void system_wakeup( void )
+{
+    gpio_init();
+    exti_init();
+    tim_t1pwm_init();
+    tim_t2pwm_init();
+#if( SLEEP_VIA_RESET == 1 )
+    // set up watchdog to about 4 s
+	iwdg_setup(0xfff, IWDG_Prescaler_128);
+#endif // ( SLEEP_VIA_RESET == 1 )
+    systick_init();
+}
+
+static void system_sleepmode( void )
+{
+    // select standby on power-down
+    PWR->CTLR |= PWR_CTLR_PDDS;
+
+    // peripheral interrupt controller send to deep sleep
+    PFIC->SCTLR |= (1 << 2);
+}
+
+static void system_nonactivity_timeout( void )
+{
+    if( RF_DATA_RX_TIMEOUT_MS < systick_get_count() )
+    {
+        system_enter_sleepmode();
+        isSetToSleepMode = true;
+        isSystemInitd = false;
+    }
+}
+
+static void system_enter_sleepmode( void )
+{
+    boot_init();
+    system_sleepmode();
+}
